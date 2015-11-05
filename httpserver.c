@@ -104,7 +104,8 @@ void *handler(void *arg) {
 	FILE *file;
 
 	// getting handler number
-	int k = *((int *) arg);
+	int *p = (int *) arg;
+	int k = *p;
 
 	printf("Thread K = %d\n", k);
 
@@ -183,6 +184,7 @@ void *handler(void *arg) {
 		}
 	}
 	close(cd[k]);
+	free(p);
 	
 	cd[k] = -1;
 

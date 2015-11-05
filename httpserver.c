@@ -4,6 +4,8 @@
 #include <netinet/in.h>
 #include <string.h>
 
+#include <sys/queue.h>
+
 struct {
 	char *ext;
 	char *conttype;
@@ -23,9 +25,23 @@ struct {
 	{0, 0}	
 };
 
-char content_type[255];
+//char content_type[255];
 
-void headers(int client, int size, int httpcode) {
+const int N = 5;
+
+pthread_t ntid[5];
+pthread_t servtid;
+pthread_mutex_t lock[5];
+int cd[5];
+
+struct qnode {
+        int value;
+        TAILQ_ENTRY(qnode) entries;
+};
+
+TAILQ_HEAD(, qnode) qhead;
+
+void headers(int client, int size, int httpcode, char* content_type) {
 	char buf[1024];
 	char strsize[20];
 	sprintf(strsize, "%d", size);
@@ -49,10 +65,12 @@ void headers(int client, int size, int httpcode) {
 	send(client, buf, strlen(buf), 0);
 	strcpy(buf, "simple-server");
 	send(client, buf, strlen(buf), 0);
-	sprintf(buf, "Content-Type: %s\r\n", content_type);
-	send(client, buf, strlen(buf), 0);
-	strcpy(buf, "\r\n");
-	send(client, buf, strlen(buf), 0);
+	if (content_type != NULL) {
+		sprintf(buf, "Content-Type: %s\r\n", content_type);
+		send(client, buf, strlen(buf), 0);
+		strcpy(buf, "\r\n");
+		send(client, buf, strlen(buf), 0); 
+	}
 }
 
 void parseFileName(char *line, char **filepath, size_t *len) {
@@ -71,14 +89,8 @@ char* getFileExt(char *filename) {
 	return strrchr(filename, '.');
 }
 
-int main() {
-	int ld = 0;
-	int res = 0;
-	int cd = 0;
+void *handler(void *arg) {
 	int filesize = 0;
-	const int backlog = 10;
-	struct sockaddr_in saddr;
-	struct sockaddr_in caddr;
 	char *line = NULL;
 	size_t len = 0;
 
@@ -87,36 +99,27 @@ int main() {
 	char *filepath = NULL;
 	size_t filepath_len = 0;
 	int empty_str_count = 0;
-	socklen_t size_saddr;
-	socklen_t size_caddr;
+
 	FILE *fd;
 	FILE *file;
 
-	ld = socket(AF_INET, SOCK_STREAM, 0);
-	if (ld == -1) {
-		printf("listener create error \n");
-	}
-	saddr.sin_family = AF_INET;
-	saddr.sin_port = htons(8080);
-	saddr.sin_addr.s_addr = INADDR_ANY;
-	res = bind(ld, (struct sockaddr *)&saddr, sizeof(saddr));
-	if (res == -1) {
-		printf("bind error \n");
-	}
-	res = listen(ld, backlog);
-	if (res == -1) {
-		printf("listen error \n");
-	}
-	while (1) {
-		cd = accept(ld, (struct sockaddr *)&caddr, &size_caddr);
-		if (cd == -1) {
-			printf("accept error \n");
-		}
-		printf("client in %d descriptor. Client addr is %d \n", cd, caddr.sin_addr.s_addr);
-		fd = fdopen(cd, "r");
-		if (fd == NULL) {
-			printf("error open client descriptor as file \n");
-		}
+	// getting handler number
+	int k = *((int *) arg);
+
+	// wait for lock
+	pthread_mutex_lock(&lock[k]);
+
+	pthread_mutex_unlock(&lock[k]);
+	
+	//try opening client descriptor
+	fd = fdopen(cd[k], "r");
+	if (fd == NULL) {
+		printf("error open client descriptor as file \n");
+		printf("500 Internal Server Error \n");
+		headers(cd[k], 0, 500, NULL);
+	} else {
+		// reading client's headers
+		int res;
 		while ((res = getline(&line, &len, fd)) != -1) {
 			if (strstr(line, "GET")) {
 				parseFileName(line, &filepath, &filepath_len);
@@ -139,29 +142,31 @@ int main() {
 
 		if (file == NULL) {
 			printf("404 File Not Found \n");
-			headers(cd, 0, 404);
+			headers(cd[k], 0, 404, NULL);
 		}
 		else {
 			char *fileext = getFileExt(filepath);
-			content_type[0] = 0;
+			char *content_type = 0;
 			int i = 0;
 			while (extensions[i].ext != 0) {
 				if (strcmp(extensions[i].ext, fileext) == 0) {
-					strcpy(content_type, extensions[i].conttype);
+					int n = strlen(extensions[i].conttype);
+					content_type = (char*) malloc(n * sizeof(char));
+					strncpy(content_type, extensions[i].conttype, n);
 					break;
 				}
 				i++;
 			}
-			if (content_type[0] != 0) {
+			if (content_type != 0) {
 				fseek(file, 0L, SEEK_END);
 				filesize = ftell(file);
 				fseek(file, 0L, SEEK_SET);
-				headers(cd, filesize, 200); 
+				headers(cd[k], filesize, 200, content_type); 
 
 				size_t nbytes = 0;
 
 				while ((nbytes = fread(buf, 1, 1024, file)) > 0) {
-					res = send(cd, buf, nbytes, 0);
+					res = send(cd[k], buf, nbytes, 0);
 					if (res == -1) {
 						printf("send error \n");
 					}
@@ -169,10 +174,127 @@ int main() {
 			}	
 			else {
 				printf("500 Internal Server Error \n");
-				headers(cd, 0, 500);
+				headers(cd[k], 0, 500, NULL);
 			}
 		}
-		close(cd);
+	}
+	close(cd[k]);
+	
+	cd[k] = -1;
+}
+
+
+void createThread(int k) {
+	int err = pthread_create(&ntid[k], NULL, handler, (void *) &k);
+	if (err != 0) {
+		printf("it's impossible to create a thread %s\n", strerror(err));
+	}
+}
+
+void *serv(void *arg) {
+	int i;
+
+	while (1) {	
+		struct qnode *item = TAILQ_FIRST(&qhead);
+		if (item != NULL) {
+			puts("Trying finding handler");
+			// try finding handler
+			i = 0;
+			while (i < N) {
+				if (pthread_mutex_trylock(&lock[i]) != 0) { 
+					// mutex is not acquired -> thread is free -> found
+					puts("Handler found");
+					cd[i] = item->value;
+					pthread_mutex_unlock(&lock[i]); // unlock mutex
+
+					// delete item from queue
+					TAILQ_REMOVE(&qhead, item, entries);
+					free(item);
+
+					break;
+				}
+				else {
+					pthread_mutex_unlock(&lock[i]);
+				}
+				i++;
+			}
+		}
+
+		//recreating dead threads
+		i = 0;
+		while (i < N) {
+			if (pthread_mutex_trylock(&lock[i]) == 0) {
+				// mutex is acquired -> thread is working or dead
+				if (cd[i] == -1) { // thread is dead
+					createThread(i);
+					puts("Handler recreated");
+				}	
+				else pthread_mutex_unlock(&lock[i]);
+			}	
+			i++;		
+		}
+	}
+}
+
+int main() {
+	int ld = 0;
+	int res = 0;
+	int _cd = 0;
+	const int backlog = 10;
+	struct sockaddr_in saddr;
+	struct sockaddr_in caddr;
+	socklen_t size_saddr;
+	socklen_t size_caddr;
+
+	struct qnode *qitem;
+
+	int i = 0;
+
+	//init queue
+	TAILQ_INIT(&qhead);
+
+	// creating threads
+	while (i < N) {
+		pthread_mutex_init(&lock[i], NULL);
+		pthread_mutex_lock(&lock[i]);
+		createThread(i);
+		i++;
+	}
+
+	int err = pthread_create(&servtid, NULL, serv, NULL);
+	if (err != 0) {
+		printf("it's impossible to create a thread %s\n", strerror(err));
+	}
+
+	ld = socket(AF_INET, SOCK_STREAM, 0);
+	if (ld == -1) {
+		printf("listener create error \n");
+	}
+	saddr.sin_family = AF_INET;
+	saddr.sin_port = htons(8080);
+	saddr.sin_addr.s_addr = INADDR_ANY;
+	res = bind(ld, (struct sockaddr *)&saddr, sizeof(saddr));
+	if (res == -1) {
+		printf("bind error \n");
+	}
+	res = listen(ld, backlog);
+	if (res == -1) {
+		printf("listen error \n");
+	}
+
+	puts("Start");
+
+	while (1) {
+		_cd = accept(ld, (struct sockaddr *)&caddr, &size_caddr);
+		if (_cd == -1) {
+			printf("accept error \n");
+		}
+		printf("client in %d descriptor. Client addr is %d \n", _cd, caddr.sin_addr.s_addr);
+
+		qitem = malloc(sizeof(*qitem));
+		qitem->value = _cd;
+                TAILQ_INSERT_TAIL(&qhead, qitem, entries);
+
 	}
 	return 0;
 }

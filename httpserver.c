@@ -106,6 +106,8 @@ void *handler(void *arg) {
 	// getting handler number
 	int k = *((int *) arg);
 
+	printf("Thread K = %d\n", k);
+
 	// wait for lock
 	pthread_mutex_lock(&lock[k]);
 
@@ -171,6 +173,8 @@ void *handler(void *arg) {
 						printf("send error \n");
 					}
 				}
+
+				free(content_type);
 			}	
 			else {
 				printf("500 Internal Server Error \n");
@@ -181,11 +185,15 @@ void *handler(void *arg) {
 	close(cd[k]);
 	
 	cd[k] = -1;
+
+	puts ("Handler destroyed");
 }
 
 
 void createThread(int k) {
-	int err = pthread_create(&ntid[k], NULL, handler, (void *) &k);
+	int *m = (int *)malloc(sizeof(int));
+	*m = k;
+	int err = pthread_create(&ntid[k], NULL, handler, (void *) m);
 	if (err != 0) {
 		printf("it's impossible to create a thread %s\n", strerror(err));
 	}
@@ -227,7 +235,7 @@ void *serv(void *arg) {
 				// mutex is acquired -> thread is working or dead
 				if (cd[i] == -1) { // thread is dead
 					createThread(i);
-					puts("Handler recreated");
+					printf("Handler %d recreated\n", i);
 				}	
 				else pthread_mutex_unlock(&lock[i]);
 			}	
@@ -257,6 +265,7 @@ int main() {
 	while (i < N) {
 		pthread_mutex_init(&lock[i], NULL);
 		pthread_mutex_lock(&lock[i]);
+		printf("i = %d\n", i);
 		createThread(i);
 		i++;
 	}

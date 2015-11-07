@@ -107,8 +107,6 @@ void *handler(void *arg) {
 	int *p = (int *) arg;
 	int k = *p;
 
-	printf("Thread K = %d\n", k);
-
 	// wait for lock
 	pthread_mutex_lock(&lock[k]);
 
@@ -267,7 +265,6 @@ int main() {
 	while (i < N) {
 		pthread_mutex_init(&lock[i], NULL);
 		pthread_mutex_lock(&lock[i]);
-		printf("i = %d\n", i);
 		createThread(i);
 		i++;
 	}
@@ -284,8 +281,7 @@ int main() {
 	saddr.sin_family = AF_INET;
 	saddr.sin_port = htons(8080);
 	saddr.sin_addr.s_addr = INADDR_ANY;
-	res = bind(ld, (struct sockaddr *)&saddr, sizeof(saddr));
-	if (res == -1) {
+	if (bind(ld, (struct sockaddr *)&saddr, sizeof(saddr)) == -1) {
 		printf("bind error \n");
 	}
 	res = listen(ld, backlog);

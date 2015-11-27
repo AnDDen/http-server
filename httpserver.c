@@ -6,6 +6,8 @@
 
 #include <sys/queue.h>
 
+#define N 5
+
 struct {
 	char *ext;
 	char *conttype;
@@ -13,8 +15,8 @@ struct {
 	{".txt", "text/html"},
 	{".htm", "text/html"},
 	{".html", "text/html"},
-	{".jpg", "text/jpeg"},
-	{".jpeg", "text/jpg"},
+	{".jpg", "image/jpeg"},
+	{".jpeg", "image/jpg"},
 	{".png", "image/png"},
 	{".ico", "image/ico"},
 	{".css", "text/css"},
@@ -27,12 +29,12 @@ struct {
 
 //char content_type[255];
 
-const int N = 5;
+//const int N = 5;
 
-pthread_t ntid[5];
+pthread_t ntid[N];
 pthread_t servtid;
-pthread_mutex_t lock[5];
-int cd[5];
+pthread_mutex_t lock[N];
+int cd[N];
 
 struct qnode {
         int value;
